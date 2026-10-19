@@ -59,4 +59,4 @@ docker build -t smtp-gateway-go:local .
 
 `task ci` 运行依赖及 lint 检查、漏洞扫描、race 测试、无 CGO SQLite 测试和构建。默认测试使用临时 SQLite 文件及本地 SMTP 故障服务端，无需 Docker。`task integration` 使用 Testcontainers 验证 PostgreSQL 契约及容器重启恢复，需要可用的 Docker daemon；CI 单独运行这些测试。`CGO_ENABLED=0` 可构建 Linux amd64 和 arm64 二进制。
 
-2026-10-19 本地构建的未压缩产物大小：Linux amd64 二进制 20,476,064 字节，Linux arm64 二进制 19,333,280 字节，Linux amd64 完整镜像 22,590,042 字节。容器测试通过 SQLite 数据卷与 PostgreSQL 数据库分别验证了强制停止后的恢复投递。
+容器测试通过 SQLite 数据卷与 PostgreSQL 数据库分别验证了强制停止后的恢复投递。
