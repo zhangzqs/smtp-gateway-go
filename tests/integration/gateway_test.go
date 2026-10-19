@@ -171,7 +171,7 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	up.mu.Unlock()
 	require.Contains(t, string(received), "sender@example.com")
 	require.Contains(t, string(received), "body\r\n")
-	items, err := db.List(t.Context(), store.Accepted, 10, 0)
+	items, err := db.List(t.Context(), store.AcceptedByUpstreamStatus, 10, 0)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, 2, items[0].Recipients[0].Attempts)

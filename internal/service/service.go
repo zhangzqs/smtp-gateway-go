@@ -58,7 +58,7 @@ func (s *Service) ListMessages(ctx context.Context, status string, limit, offset
 	if !store.ValidStatus(status) {
 		return nil, ErrInvalidStatus
 	}
-	return s.store.List(ctx, status, limit, offset)
+	return s.store.List(ctx, store.Status(status), limit, offset)
 }
 
 func (s *Service) RetryMessage(ctx context.Context, id string) error {

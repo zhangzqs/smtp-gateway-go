@@ -120,11 +120,11 @@ func TestDeliverPartialRecipients(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	outcomes := Deliver(ctx, settings, claim)
-	statuses := map[string]string{}
+	statuses := map[string]store.Status{}
 	for _, outcome := range outcomes {
 		statuses[outcome.ID] = outcome.Status
 	}
-	require.Equal(t, map[string]string{"a": store.Accepted, "b": store.Pending, "c": store.Failed}, statuses)
+	require.Equal(t, map[string]store.Status{"a": store.AcceptedByUpstreamStatus, "b": store.PendingStatus, "c": store.FailedStatus}, statuses)
 	select {
 	case body := <-backend.received:
 		require.Contains(t, string(body), "sender@example.com")

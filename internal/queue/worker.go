@@ -104,7 +104,7 @@ func (w *Worker) deliver(ctx context.Context, claim *store.Claimed) {
 	if err != nil || settings.Host == "" {
 		outcomes = make([]relay.Outcome, 0, len(claim.Recipients))
 		for _, recipient := range claim.Recipients {
-			outcomes = append(outcomes, relay.Outcome{ID: recipient.ID, Status: store.Pending, Error: "relay_unavailable"})
+			outcomes = append(outcomes, relay.Outcome{ID: recipient.ID, Status: store.PendingStatus, Error: "relay_unavailable"})
 		}
 	} else {
 		outcomes = relay.Deliver(attemptCtx, settings, claim)
@@ -118,10 +118,10 @@ func (w *Worker) deliver(ctx context.Context, claim *store.Claimed) {
 			}
 			status := outcome.Status
 			next := int64(0)
-			if status == store.Pending {
+			if status == store.PendingStatus {
 				next = now.Add(backoff(w.Config, recipient.Attempts)).UnixMilli()
 				if next >= claim.ExpiresAt {
-					status = store.Expired
+					status = store.ExpiredStatus
 				}
 			}
 			results = append(results, store.Result{ID: outcome.ID, Status: status, Error: outcome.Error, NextAt: next})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
@@ -12,13 +13,22 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type Driver string
+
+const (
+	SQLiteDriver   Driver = "sqlite"
+	PostgresDriver Driver = "postgres"
+)
+
+var DriverValues = []Driver{SQLiteDriver, PostgresDriver}
+
 type Config struct {
-	Driver string `yaml:"driver"`
+	Driver Driver `yaml:"driver"`
 	DSN    string `yaml:"dsn"`
 }
 
 func (c Config) Validate() error {
-	if c.Driver != "sqlite" && c.Driver != "postgres" {
+	if !slices.Contains(DriverValues, c.Driver) {
 		return errors.New("database.driver must be sqlite or postgres")
 	}
 	if c.DSN == "" {
@@ -30,7 +40,7 @@ func (c Config) Validate() error {
 type Database struct {
 	db     *gorm.DB
 	sql    *sql.DB
-	driver string
+	driver Driver
 }
 
 func New(ctx context.Context, cfg Config) (*Database, error) {
@@ -40,7 +50,7 @@ func New(ctx context.Context, cfg Config) (*Database, error) {
 	var sqlDB *sql.DB
 	var dialector gorm.Dialector
 	var err error
-	if cfg.Driver == "sqlite" {
+	if cfg.Driver == SQLiteDriver {
 		sqlDB, err = sql.Open("sqlite", cfg.DSN)
 		if err != nil {
 			return nil, err
@@ -78,5 +88,5 @@ func New(ctx context.Context, cfg Config) (*Database, error) {
 
 func (d *Database) DB() *gorm.DB   { return d.db }
 func (d *Database) SQL() *sql.DB   { return d.sql }
-func (d *Database) Driver() string { return d.driver }
+func (d *Database) Driver() Driver { return d.driver }
 func (d *Database) Close() error   { return d.sql.Close() }

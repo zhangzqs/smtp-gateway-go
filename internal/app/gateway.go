@@ -3,19 +3,15 @@ package app
 import (
 	"context"
 	"errors"
-	stdlog "log"
-	"net/http"
 	"sync/atomic"
 	"time"
-
-	"github.com/emersion/go-smtp"
-	"github.com/rs/zerolog"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/api"
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
 	"github.com/zhangzqs/smtp-gateway-go/internal/infra/database"
-	"github.com/zhangzqs/smtp-gateway-go/internal/infra/listener"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/httpserver"
 	loggerinfra "github.com/zhangzqs/smtp-gateway-go/internal/infra/logger"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/smtpserver"
 	"github.com/zhangzqs/smtp-gateway-go/internal/queue"
 	"github.com/zhangzqs/smtp-gateway-go/internal/service"
 	"github.com/zhangzqs/smtp-gateway-go/internal/smtpd"
@@ -52,27 +48,25 @@ func (g *Gateway) Run(ctx context.Context) error {
 	}
 	var ready atomic.Bool
 	apiServer := &api.API{Service: service.New(db, cfg, ready.Load), Auth: cfg.HTTP.BasicAuth}
-	httpServer := &http.Server{Addr: cfg.HTTP.Listen, Handler: apiServer.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	smtpServer := smtp.NewServer(&smtpd.Backend{Store: db, Config: cfg})
-	smtpServer.ErrorLog = stdlog.New(logger.Level(zerolog.ErrorLevel), "", 0)
-	smtpServer.Addr = cfg.SMTP.Listen
-	smtpServer.Domain = cfg.SMTP.Hostname
-	smtpServer.MaxRecipients = cfg.Limits.MaxRecipients
-	smtpServer.MaxMessageBytes = cfg.Limits.MaxMessageBytes
-	smtpServer.AllowInsecureAuth = cfg.SMTP.AllowInsecureAuth
-	smtpServer.ReadTimeout = 5 * time.Minute
-	smtpServer.WriteTimeout = 5 * time.Minute
-	httpListener, err := listener.New(ctx, listener.Config{Addr: cfg.HTTP.Listen, TLS: cfg.HTTP.TLS})
+	httpServer, err := httpserver.New(ctx, httpserver.Options{Addr: cfg.HTTP.Listen, TLS: cfg.HTTP.TLS, Handler: apiServer.Handler()})
 	if err != nil {
 		return err
 	}
-	defer func() { _ = httpListener.Close() }()
-	smtpListener, err := listener.New(ctx, listener.Config{Addr: cfg.SMTP.Listen, TLS: cfg.SMTP.TLS})
+	defer func() { _ = httpServer.Close() }()
+	smtpServer, err := smtpserver.New(ctx, smtpserver.Options{
+		Addr:              cfg.SMTP.Listen,
+		Domain:            cfg.SMTP.Hostname,
+		TLS:               cfg.SMTP.TLS,
+		Backend:           &smtpd.Backend{Store: db, Config: cfg},
+		Logger:            logger,
+		MaxRecipients:     cfg.Limits.MaxRecipients,
+		MaxMessageBytes:   cfg.Limits.MaxMessageBytes,
+		AllowInsecureAuth: cfg.SMTP.AllowInsecureAuth,
+	})
 	if err != nil {
 		return err
 	}
-	defer func() { _ = smtpListener.Close() }()
-	smtpServer.TLSConfig = smtpListener.TLSConfig()
+	defer func() { _ = smtpServer.Close() }()
 	workerCtx, cancelWorkers := context.WithCancel(context.WithoutCancel(ctx))
 	worker := queue.New(db, cfg.Worker)
 	apiServer.DeliveryDuration = worker.DeliveryDuration()
@@ -81,29 +75,29 @@ func (g *Gateway) Run(ctx context.Context) error {
 		cancelWorkers()
 		worker.Wait()
 	}()
+	serversCtx, stopServers := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopServers()
 	errorsCh := make(chan error, 2)
-	go func() { errorsCh <- httpServer.Serve(httpListener) }()
-	go func() { errorsCh <- smtpServer.Serve(smtpListener) }()
+	go func() { errorsCh <- httpServer.Run(serversCtx) }()
+	go func() { errorsCh <- smtpServer.Run(serversCtx) }()
 	ready.Store(true)
 	logger.Info().Str("http", cfg.HTTP.Listen).Str("smtp", cfg.SMTP.Listen).Msg("gateway ready")
 	var runErr error
+	remaining := 2
 	select {
 	case <-ctx.Done():
 	case err := <-errorsCh:
-		if !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, smtp.ErrServerClosed) {
-			runErr = err
-		}
+		runErr = err
+		remaining--
 	}
 	ready.Store(false)
 	worker.StopClaiming()
+	stopServers()
+	for range remaining {
+		runErr = errors.Join(runErr, <-errorsCh)
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if err := smtpServer.Shutdown(shutdownCtx); err != nil {
-		logger.Warn().Err(err).Msg("SMTP shutdown")
-	}
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		logger.Warn().Err(err).Msg("HTTP shutdown")
-	}
 	workerDone := make(chan struct{})
 	go func() { worker.Wait(); close(workerDone) }()
 	select {

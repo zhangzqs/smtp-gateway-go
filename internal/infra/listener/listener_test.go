@@ -27,8 +27,8 @@ func TestTLSModes(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]}), 0o600))
 	require.NoError(t, os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0o600))
 
-	for _, mode := range []string{"starttls", "implicit"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, mode := range []Mode{StartTLSMode, ImplicitMode} {
+		t.Run(string(mode), func(t *testing.T) {
 			listener, err := New(t.Context(), Config{Addr: "127.0.0.1:0", TLS: TLS{Mode: mode, CertFile: certFile, KeyFile: keyFile}})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, listener.Close()) })
@@ -43,7 +43,7 @@ func TestTLSModes(t *testing.T) {
 				}
 				defer func() { _ = conn.Close() }()
 				tlsConn, isTLS := conn.(*tls.Conn)
-				if isTLS != (mode == "implicit") {
+				if isTLS != (mode == ImplicitMode) {
 					accepted <- errors.New("listener TLS mode does not match")
 					return
 				}
@@ -53,7 +53,7 @@ func TestTLSModes(t *testing.T) {
 				}
 				accepted <- nil
 			}()
-			if mode == "implicit" {
+			if mode == ImplicitMode {
 				roots := x509.NewCertPool()
 				roots.AddCert(source.Certificate())
 				dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: time.Second}, Config: &tls.Config{RootCAs: roots}}

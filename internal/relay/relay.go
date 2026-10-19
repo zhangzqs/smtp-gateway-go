@@ -45,11 +45,11 @@ func Rewrite(raw []byte, sender config.Relay) ([]byte, error) {
 
 type Outcome struct {
 	ID     string
-	Status string
+	Status store.Status
 	Error  string
 }
 
-func all(recipients []store.Recipient, status, category string) []Outcome {
+func all(recipients []store.Recipient, status store.Status, category string) []Outcome {
 	results := make([]Outcome, 0, len(recipients))
 	for _, recipient := range recipients {
 		results = append(results, Outcome{recipient.ID, status, category})
@@ -60,21 +60,21 @@ func all(recipients []store.Recipient, status, category string) []Outcome {
 func Deliver(ctx context.Context, settings config.Relay, claim *store.Claimed) []Outcome {
 	body, err := Rewrite(claim.Raw, settings)
 	if err != nil {
-		return all(claim.Recipients, store.Failed, "invalid_message")
+		return all(claim.Recipients, store.FailedStatus, "invalid_message")
 	}
 	client, conn, stop, err := dial(ctx, settings)
 	if err != nil {
-		return all(claim.Recipients, store.Pending, "connection_or_tls")
+		return all(claim.Recipients, store.PendingStatus, "connection_or_tls")
 	}
 	defer func() { _ = stop() }()
 	defer func() { _ = conn.Close() }()
 	if settings.Username != "" {
 		if err := client.Auth(sasl.NewPlainClient("", settings.Username, settings.Password)); err != nil {
-			return all(claim.Recipients, store.Pending, "upstream_auth")
+			return all(claim.Recipients, store.PendingStatus, "upstream_auth")
 		}
 	}
 	if err := client.Mail(settings.FromAddress, nil); err != nil {
-		return all(claim.Recipients, store.Pending, "mail_from")
+		return all(claim.Recipients, store.PendingStatus, "mail_from")
 	}
 	results := make([]Outcome, 0, len(claim.Recipients))
 	accepted := make([]store.Recipient, 0, len(claim.Recipients))
@@ -84,9 +84,9 @@ func Deliver(ctx context.Context, settings config.Relay, claim *store.Claimed) [
 			accepted = append(accepted, recipient)
 			continue
 		}
-		status := store.Pending
+		status := store.PendingStatus
 		if permanent(err) {
-			status = store.Failed
+			status = store.FailedStatus
 		}
 		results = append(results, Outcome{recipient.ID, status, "rcpt_rejected"})
 	}
@@ -95,26 +95,26 @@ func Deliver(ctx context.Context, settings config.Relay, claim *store.Claimed) [
 	}
 	command, err := client.Data()
 	if err != nil {
-		status := store.Pending
+		status := store.PendingStatus
 		if permanent(err) {
-			status = store.Failed
+			status = store.FailedStatus
 		}
 		return append(results, all(accepted, status, "data_rejected")...)
 	}
 	if _, err := command.Write(body); err != nil {
 		_ = command.Close()
-		return append(results, all(accepted, store.Pending, "data_uncertain")...)
+		return append(results, all(accepted, store.PendingStatus, "data_uncertain")...)
 	}
 	if err := command.Close(); err != nil {
-		status := store.Pending
+		status := store.PendingStatus
 		if permanent(err) {
-			status = store.Failed
+			status = store.FailedStatus
 		}
 		return append(results, all(accepted, status, "data_rejected_or_uncertain")...)
 	}
 	// DATA's final 2xx response is the acceptance boundary. A later QUIT error
 	// must not cause a resend.
-	return append(results, all(accepted, store.Accepted, "")...)
+	return append(results, all(accepted, store.AcceptedByUpstreamStatus, "")...)
 }
 
 func permanent(err error) bool {

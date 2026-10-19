@@ -1,7 +1,7 @@
 package logger
 
 import (
-	"errors"
+	"fmt"
 	"os"
 
 	"github.com/rs/zerolog"
@@ -12,12 +12,10 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
-	switch c.Level {
-	case "trace", "debug", "info", "warn", "error":
-		return nil
-	default:
-		return errors.New("logger.level must be trace, debug, info, warn, or error")
+	if _, err := zerolog.ParseLevel(c.Level); err != nil {
+		return fmt.Errorf("logger.level: %w", err)
 	}
+	return nil
 }
 
 func New(cfg Config) (zerolog.Logger, error) {

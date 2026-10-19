@@ -132,7 +132,7 @@ func (h HTTP) Validate() error {
 	if h.Listen == "" || h.BasicAuth.Username == "" || h.BasicAuth.Password == "" {
 		return errors.New("http.listen and http.basic_auth credentials are required")
 	}
-	if h.TLS.Mode == "starttls" {
+	if h.TLS.Mode == listener.StartTLSMode {
 		return errors.New("invalid listener TLS mode")
 	}
 	return h.TLS.Validate()
@@ -145,7 +145,7 @@ func (s SMTP) Validate() error {
 	if err := s.TLS.Validate(); err != nil {
 		return err
 	}
-	if (s.TLS.Mode == "" || s.TLS.Mode == "none") && !s.AllowInsecureAuth {
+	if (s.TLS.Mode == "" || s.TLS.Mode == listener.NoneMode) && !s.AllowInsecureAuth {
 		return errors.New("SMTP TLS is required unless allow_insecure_auth is explicitly enabled")
 	}
 	return nil

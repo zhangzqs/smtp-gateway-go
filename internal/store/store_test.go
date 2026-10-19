@@ -138,15 +138,15 @@ func runQueueContract(t *testing.T, s *Store, cfg config.Config, key []byte) {
 	stale.ClaimToken = "stale"
 	err = s.Complete(t.Context(), &stale, nil)
 	require.ErrorIs(t, err, ErrConflict)
-	results := []Result{{ID: claim.Recipients[0].ID, Status: Accepted}, {ID: claim.Recipients[1].ID, Status: Failed, Error: "rcpt_rejected"}}
+	results := []Result{{ID: claim.Recipients[0].ID, Status: AcceptedByUpstreamStatus}, {ID: claim.Recipients[1].ID, Status: FailedStatus, Error: "rcpt_rejected"}}
 	require.NoError(t, s.Complete(t.Context(), claim, results))
 	require.ErrorIs(t, s.Complete(t.Context(), claim, results), ErrConflict)
 	require.NoError(t, s.Retry(t.Context(), id, time.Hour, 7*24*time.Hour))
-	items, err := s.List(t.Context(), Pending, 10, 0)
+	items, err := s.List(t.Context(), PendingStatus, 10, 0)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	require.Equal(t, Accepted, items[0].Recipients[0].Status)
-	require.Equal(t, Pending, items[0].Recipients[1].Status)
+	require.Equal(t, AcceptedByUpstreamStatus, items[0].Recipients[0].Status)
+	require.Equal(t, PendingStatus, items[0].Recipients[1].Status)
 	// A second process can open the same durable queue after a restart.
 	require.NoError(t, s.Close())
 	reopened := openStore(t, cfg, key)
