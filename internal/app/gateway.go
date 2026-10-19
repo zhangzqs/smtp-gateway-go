@@ -16,6 +16,7 @@ import (
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
 	"github.com/zhangzqs/smtp-gateway-go/internal/infra"
 	"github.com/zhangzqs/smtp-gateway-go/internal/queue"
+	"github.com/zhangzqs/smtp-gateway-go/internal/service"
 	"github.com/zhangzqs/smtp-gateway-go/internal/smtpd"
 	"github.com/zhangzqs/smtp-gateway-go/internal/store"
 )
@@ -45,7 +46,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 		return err
 	}
 	var ready atomic.Bool
-	apiServer := &api.API{Store: db, Cfg: cfg, Ready: ready.Load}
+	apiServer := &api.API{Service: service.New(db, cfg, ready.Load), Auth: cfg.HTTP.BasicAuth}
 	httpServer := &http.Server{Addr: cfg.HTTP.Listen, Handler: apiServer.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	smtpServer := smtp.NewServer(&smtpd.Backend{Store: db, Config: cfg})
 	smtpServer.ErrorLog = stdlog.New(logger.Level(zerolog.ErrorLevel), "", 0)

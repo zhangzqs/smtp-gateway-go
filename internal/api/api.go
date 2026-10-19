@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -16,13 +15,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
-	"github.com/zhangzqs/smtp-gateway-go/internal/store"
+	"github.com/zhangzqs/smtp-gateway-go/internal/service"
 )
 
 type API struct {
-	Store            *store.Store
-	Cfg              config.Config
-	Ready            func() bool
+	Service          *service.Service
+	Auth             config.Credentials
 	DeliveryDuration prometheus.Summary
 }
 
@@ -45,8 +43,8 @@ func (a *API) Handler() http.Handler {
 func (a *API) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, password, ok := r.BasicAuth()
-		wantUser := sha256.Sum256([]byte(a.Cfg.HTTP.BasicAuth.Username))
-		wantPass := sha256.Sum256([]byte(a.Cfg.HTTP.BasicAuth.Password))
+		wantUser := sha256.Sum256([]byte(a.Auth.Username))
+		wantPass := sha256.Sum256([]byte(a.Auth.Password))
 		gotUser := sha256.Sum256([]byte(username))
 		gotPass := sha256.Sum256([]byte(password))
 		if !ok || subtle.ConstantTimeCompare(gotUser[:], wantUser[:]) != 1 || subtle.ConstantTimeCompare(gotPass[:], wantPass[:]) != 1 {
@@ -59,7 +57,7 @@ func (a *API) auth(next http.Handler) http.Handler {
 }
 
 func (a *API) ready(w http.ResponseWriter, r *http.Request) {
-	if a.Ready == nil || !a.Ready() || a.Store.Ready(r.Context()) != nil {
+	if a.Service.Ready(r.Context()) != nil {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -74,7 +72,7 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func (a *API) getRelay(w http.ResponseWriter, r *http.Request) {
-	_, view, err := a.Store.Relay(r.Context())
+	view, err := a.Service.Relay(r.Context())
 	if err != nil {
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 		return
@@ -93,7 +91,7 @@ type relayInput struct {
 }
 
 func (a *API) putRelay(w http.ResponseWriter, r *http.Request) {
-	if a.Cfg.Relay != nil {
+	if a.Service.CheckRelayWritable() != nil {
 		http.Error(w, "relay is read only", http.StatusForbidden)
 		return
 	}
@@ -102,12 +100,12 @@ func (a *API) putRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	view, err := a.Store.SaveRelay(r.Context(), relay, password)
+	view, err := a.Service.UpdateRelay(r.Context(), relay, password)
 	if err != nil {
 		switch {
-		case errors.Is(err, store.ErrReadOnly):
+		case errors.Is(err, service.ErrReadOnly):
 			http.Error(w, "relay is read only", http.StatusForbidden)
-		case errors.Is(err, store.ErrValidation):
+		case errors.Is(err, service.ErrValidation):
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		default:
 			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
@@ -140,10 +138,6 @@ func decodeRelayInput(body io.Reader) (config.Relay, *string, error) {
 
 func (a *API) messages(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
-	if !store.ValidStatus(status) {
-		http.Error(w, "invalid status", http.StatusUnprocessableEntity)
-		return
-	}
 	limit := 50
 	if value := r.URL.Query().Get("limit"); value != "" {
 		var err error
@@ -162,22 +156,26 @@ func (a *API) messages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	items, err := a.Store.List(r.Context(), status, limit, offset)
+	items, err := a.Service.ListMessages(r.Context(), status, limit, offset)
 	if err != nil {
-		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		if errors.Is(err, service.ErrInvalidStatus) {
+			http.Error(w, "invalid status", http.StatusUnprocessableEntity)
+		} else {
+			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		}
 		return
 	}
 	writeJSON(w, map[string]any{"messages": items, "limit": limit, "offset": offset})
 }
 
 func (a *API) retry(w http.ResponseWriter, r *http.Request) {
-	err := a.Store.Retry(r.Context(), chi.URLParam(r, "id"), a.Cfg.Worker.MaxAge, a.Cfg.Worker.HistoryRetention)
+	err := a.Service.RetryMessage(r.Context(), chi.URLParam(r, "id"))
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, service.ErrNotFound):
 		http.Error(w, "message not found", http.StatusNotFound)
-	case errors.Is(err, store.ErrConflict):
+	case errors.Is(err, service.ErrConflict):
 		http.Error(w, "message cannot be retried", http.StatusConflict)
 	default:
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
@@ -185,14 +183,10 @@ func (a *API) retry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := a.Store.Metrics(r.Context())
+	snapshot, err := a.Service.Metrics(r.Context())
 	if err != nil {
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 		return
-	}
-	oldest := int64(0)
-	if snapshot.Oldest > 0 {
-		oldest = max(0, time.Now().UnixMilli()-snapshot.Oldest) / 1000
 	}
 	registry := prometheus.NewRegistry()
 	for _, item := range []struct {
@@ -202,7 +196,7 @@ func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
 	}{
 		{"smtp_gateway_pending_recipients", "Pending recipients in the queue.", snapshot.Pending},
 		{"smtp_gateway_pending_bytes", "Bytes in messages with pending recipients.", snapshot.Bytes},
-		{"smtp_gateway_oldest_pending_seconds", "Age of the oldest pending message in seconds.", oldest},
+		{"smtp_gateway_oldest_pending_seconds", "Age of the oldest pending message in seconds.", snapshot.OldestPendingSeconds},
 		{"smtp_gateway_in_flight_messages", "Messages currently leased for delivery.", snapshot.InFlight},
 		{"smtp_gateway_accepted_recipients", "Recipients accepted by the upstream relay.", snapshot.Accepted},
 		{"smtp_gateway_failed_recipients", "Recipients permanently rejected by the upstream relay.", snapshot.Failed},

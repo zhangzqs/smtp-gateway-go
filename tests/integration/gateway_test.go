@@ -23,6 +23,7 @@ import (
 	"github.com/zhangzqs/smtp-gateway-go/internal/api"
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
 	"github.com/zhangzqs/smtp-gateway-go/internal/queue"
+	"github.com/zhangzqs/smtp-gateway-go/internal/service"
 	"github.com/zhangzqs/smtp-gateway-go/internal/smtpd"
 	"github.com/zhangzqs/smtp-gateway-go/internal/store"
 )
@@ -76,7 +77,7 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	db, err := store.Open(t.Context(), cfg, key)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	managementAPI := &api.API{Store: db, Cfg: cfg, Ready: func() bool { return true }}
+	managementAPI := &api.API{Service: service.New(db, cfg, func() bool { return true }), Auth: cfg.HTTP.BasicAuth}
 	apiServer := httptest.NewServer(managementAPI.Handler())
 	t.Cleanup(apiServer.Close)
 	head, err := http.NewRequestWithContext(t.Context(), http.MethodHead, apiServer.URL+"/healthz", nil)
@@ -98,6 +99,13 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	response, err = apiServer.Client().Do(request)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusUnauthorized, response.StatusCode)
+	require.NoError(t, response.Body.Close())
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, apiServer.URL+"/v1/messages?status=unknown", nil)
+	require.NoError(t, err)
+	request.SetBasicAuth("manager", httpPassword)
+	response, err = apiServer.Client().Do(request)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnprocessableEntity, response.StatusCode)
 	require.NoError(t, response.Body.Close())
 
 	upstreamListener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
