@@ -1,0 +1,7 @@
+/bin/
+/coverage.out
+/config.yaml
+/.worktrees/
+*.db
+*.db-shm
+*.db-wal
