@@ -76,7 +76,8 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	db, err := store.Open(t.Context(), cfg, key)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	apiServer := httptest.NewServer((&api.API{Store: db, Cfg: cfg, Ready: func() bool { return true }}).Handler())
+	managementAPI := &api.API{Store: db, Cfg: cfg, Ready: func() bool { return true }}
+	apiServer := httptest.NewServer(managementAPI.Handler())
 	t.Cleanup(apiServer.Close)
 	head, err := http.NewRequestWithContext(t.Context(), http.MethodHead, apiServer.URL+"/healthz", nil)
 	require.NoError(t, err)
@@ -146,6 +147,7 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 
 	workerCtx, stop := context.WithCancel(context.Background())
 	worker := queue.New(db, cfg.Worker)
+	managementAPI.DeliveryDuration = worker.DeliveryDuration()
 	worker.Start(workerCtx)
 	t.Cleanup(func() { stop(); worker.Wait() })
 	require.Eventually(t, func() bool {
@@ -174,6 +176,10 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	require.NoError(t, response.Body.Close())
 	require.Contains(t, string(metrics), "smtp_gateway_accepted_recipients 1")
 	require.Contains(t, string(metrics), "smtp_gateway_retries "+strconv.Itoa(items[0].Recipients[0].Attempts-1))
+	require.Contains(t, string(metrics), "# TYPE smtp_gateway_accepted_recipients gauge")
+	require.Contains(t, string(metrics), "# TYPE smtp_gateway_database_write_failures_total counter")
+	require.Contains(t, string(metrics), "# TYPE smtp_gateway_delivery_attempt_seconds summary")
+	require.Contains(t, string(metrics), "smtp_gateway_delivery_attempt_seconds_count 2")
 	request, err = http.NewRequestWithContext(t.Context(), http.MethodPost, apiServer.URL+"/v1/messages/missing/retry", nil)
 	require.NoError(t, err)
 	request.SetBasicAuth("manager", httpPassword)

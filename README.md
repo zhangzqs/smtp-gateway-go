@@ -20,7 +20,7 @@ go run ./cmd/smtp-gateway serve --config config.yaml
 
 ## 管理 API
 
-除健康检查外，接口都要求 HTTP Basic Auth。`/metrics` 也受 Basic Auth 保护。
+除健康检查外，接口都要求 HTTP Basic Auth。`/metrics` 也受 Basic Auth 保护，使用 Prometheus Go 客户端输出队列指标和投递耗时。
 
 | 接口 | 用途 |
 | --- | --- |

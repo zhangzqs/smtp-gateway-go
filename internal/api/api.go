@@ -5,25 +5,25 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
 	"github.com/zhangzqs/smtp-gateway-go/internal/store"
 )
 
 type API struct {
-	Store         *store.Store
-	Cfg           config.Config
-	Ready         func() bool
-	DeliveryStats func() (int64, float64)
+	Store            *store.Store
+	Cfg              config.Config
+	Ready            func() bool
+	DeliveryDuration prometheus.Summary
 }
 
 func (a *API) Handler() http.Handler {
@@ -185,36 +185,42 @@ func (a *API) retry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
-	metrics, err := a.Store.Metrics(r.Context())
+	snapshot, err := a.Store.Metrics(r.Context())
 	if err != nil {
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	oldest := int64(0)
-	if metrics.Oldest > 0 {
-		oldest = max(0, time.Now().UnixMilli()-metrics.Oldest) / 1000
+	if snapshot.Oldest > 0 {
+		oldest = max(0, time.Now().UnixMilli()-snapshot.Oldest) / 1000
 	}
-	var body strings.Builder
+	registry := prometheus.NewRegistry()
 	for _, item := range []struct {
 		name  string
+		help  string
 		value int64
 	}{
-		{"smtp_gateway_pending_recipients", metrics.Pending},
-		{"smtp_gateway_pending_bytes", metrics.Bytes},
-		{"smtp_gateway_oldest_pending_seconds", oldest},
-		{"smtp_gateway_in_flight_messages", metrics.InFlight},
-		{"smtp_gateway_accepted_recipients", metrics.Accepted},
-		{"smtp_gateway_failed_recipients", metrics.Failed},
-		{"smtp_gateway_expired_recipients", metrics.Expired},
-		{"smtp_gateway_retries", metrics.Retries},
-		{"smtp_gateway_database_write_failures_total", metrics.DBWriteFailures},
+		{"smtp_gateway_pending_recipients", "Pending recipients in the queue.", snapshot.Pending},
+		{"smtp_gateway_pending_bytes", "Bytes in messages with pending recipients.", snapshot.Bytes},
+		{"smtp_gateway_oldest_pending_seconds", "Age of the oldest pending message in seconds.", oldest},
+		{"smtp_gateway_in_flight_messages", "Messages currently leased for delivery.", snapshot.InFlight},
+		{"smtp_gateway_accepted_recipients", "Recipients accepted by the upstream relay.", snapshot.Accepted},
+		{"smtp_gateway_failed_recipients", "Recipients permanently rejected by the upstream relay.", snapshot.Failed},
+		{"smtp_gateway_expired_recipients", "Recipients whose delivery window expired.", snapshot.Expired},
+		{"smtp_gateway_retries", "Retry attempts retained in the queue.", snapshot.Retries},
 	} {
-		_, _ = fmt.Fprintf(&body, "%s %d\n", item.name, item.value)
+		metric := prometheus.NewGauge(prometheus.GaugeOpts{Name: item.name, Help: item.help})
+		metric.Set(float64(item.value))
+		registry.MustRegister(metric)
 	}
-	if a.DeliveryStats != nil {
-		count, seconds := a.DeliveryStats()
-		_, _ = fmt.Fprintf(&body, "smtp_gateway_delivery_attempt_seconds_count %d\nsmtp_gateway_delivery_attempt_seconds_sum %g\n", count, seconds)
+	failures := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "smtp_gateway_database_write_failures_total",
+		Help: "Database write failures while accepting messages.",
+	})
+	failures.Add(float64(snapshot.DBWriteFailures))
+	registry.MustRegister(failures)
+	if a.DeliveryDuration != nil {
+		registry.MustRegister(a.DeliveryDuration)
 	}
-	_, _ = w.Write([]byte(body.String()))
+	promhttp.HandlerFor(registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
 }

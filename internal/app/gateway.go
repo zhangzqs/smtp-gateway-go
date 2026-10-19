@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	stdlog "log"
 	"net/http"
 	"sync/atomic"
 	"time"
 
 	"github.com/emersion/go-smtp"
+	"github.com/rs/zerolog"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/api"
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
@@ -46,6 +48,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 	apiServer := &api.API{Store: db, Cfg: cfg, Ready: ready.Load}
 	httpServer := &http.Server{Addr: cfg.HTTP.Listen, Handler: apiServer.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	smtpServer := smtp.NewServer(&smtpd.Backend{Store: db, Config: cfg})
+	smtpServer.ErrorLog = stdlog.New(logger.Level(zerolog.ErrorLevel), "", 0)
 	smtpServer.Addr = cfg.SMTP.Listen
 	smtpServer.Domain = cfg.SMTP.Hostname
 	smtpServer.MaxRecipients = cfg.Limits.MaxRecipients
@@ -80,7 +83,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 	defer func() { _ = smtpListener.Close() }()
 	workerCtx, cancelWorkers := context.WithCancel(context.WithoutCancel(ctx))
 	worker := queue.New(db, cfg.Worker)
-	apiServer.DeliveryStats = worker.Stats
+	apiServer.DeliveryDuration = worker.DeliveryDuration()
 	worker.Start(workerCtx)
 	defer func() {
 		cancelWorkers()

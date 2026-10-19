@@ -2,13 +2,12 @@ package queue
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	"math/big"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	retrybackoff "github.com/cenkalti/backoff/v4"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
@@ -17,16 +16,22 @@ import (
 )
 
 type Worker struct {
-	Store         *store.Store
-	Config        config.Worker
-	wg            sync.WaitGroup
-	attempts      atomic.Int64
-	durationNanos atomic.Int64
-	stopClaims    context.CancelFunc
+	Store      *store.Store
+	Config     config.Worker
+	wg         sync.WaitGroup
+	duration   prometheus.Summary
+	stopClaims context.CancelFunc
 }
 
 func New(s *store.Store, cfg config.Worker) *Worker {
-	return &Worker{Store: s, Config: cfg}
+	return &Worker{
+		Store:  s,
+		Config: cfg,
+		duration: prometheus.NewSummary(prometheus.SummaryOpts{
+			Name: "smtp_gateway_delivery_attempt_seconds",
+			Help: "Duration of upstream delivery attempts in seconds.",
+		}),
+	}
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -64,9 +69,7 @@ func (w *Worker) Wait() { w.wg.Wait() }
 
 func (w *Worker) StopClaiming() { w.stopClaims() }
 
-func (w *Worker) Stats() (int64, float64) {
-	return w.attempts.Load(), float64(w.durationNanos.Load()) / float64(time.Second)
-}
+func (w *Worker) DeliveryDuration() prometheus.Summary { return w.duration }
 
 func (w *Worker) loop(ctx, claimCtx context.Context) {
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -93,10 +96,7 @@ func (w *Worker) loop(ctx, claimCtx context.Context) {
 
 func (w *Worker) deliver(ctx context.Context, claim *store.Claimed) {
 	started := time.Now()
-	defer func() {
-		w.attempts.Add(1)
-		w.durationNanos.Add(time.Since(started).Nanoseconds())
-	}()
+	defer func() { w.duration.Observe(time.Since(started).Seconds()) }()
 	attemptCtx, cancel := context.WithTimeout(ctx, w.Config.AttemptTimeout)
 	defer cancel()
 	settings, _, err := w.Store.Relay(attemptCtx)
@@ -140,20 +140,14 @@ func (w *Worker) deliver(ctx context.Context, claim *store.Claimed) {
 }
 
 func backoff(cfg config.Worker, attempts int) time.Duration {
-	delay := cfg.RetryInitial
+	policy := retrybackoff.NewExponentialBackOff(
+		retrybackoff.WithInitialInterval(cfg.RetryInitial),
+		retrybackoff.WithMultiplier(2),
+		retrybackoff.WithMaxInterval(cfg.RetryMax),
+		retrybackoff.WithMaxElapsedTime(0),
+	)
 	for range min(attempts, 30) {
-		if delay >= cfg.RetryMax/2 {
-			delay = cfg.RetryMax
-			break
-		}
-		delay *= 2
+		policy.NextBackOff()
 	}
-	if delay > cfg.RetryMax {
-		delay = cfg.RetryMax
-	}
-	jitter, err := rand.Int(rand.Reader, big.NewInt(int64(delay/2)+1))
-	if err != nil {
-		return delay
-	}
-	return delay/2 + time.Duration(jitter.Int64())
+	return min(policy.NextBackOff(), cfg.RetryMax)
 }

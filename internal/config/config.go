@@ -1,9 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net/mail"
@@ -62,12 +62,12 @@ type Limits struct {
 
 type Worker struct {
 	Concurrency      int           `yaml:"concurrency"`
-	AttemptTimeout   time.Duration `yaml:"-"`
-	LeaseDuration    time.Duration `yaml:"-"`
-	RetryInitial     time.Duration `yaml:"-"`
-	RetryMax         time.Duration `yaml:"-"`
-	MaxAge           time.Duration `yaml:"-"`
-	HistoryRetention time.Duration `yaml:"-"`
+	AttemptTimeout   time.Duration `yaml:"attempt_timeout"`
+	LeaseDuration    time.Duration `yaml:"lease_duration"`
+	RetryInitial     time.Duration `yaml:"retry_initial"`
+	RetryMax         time.Duration `yaml:"retry_max"`
+	MaxAge           time.Duration `yaml:"max_age"`
+	HistoryRetention time.Duration `yaml:"history_retention"`
 }
 
 type Relay struct {
@@ -91,54 +91,6 @@ type Config struct {
 	Relay    *Relay   `yaml:"relay"`
 }
 
-type workerYAML struct {
-	Concurrency      *int   `yaml:"concurrency"`
-	AttemptTimeout   string `yaml:"attempt_timeout"`
-	LeaseDuration    string `yaml:"lease_duration"`
-	RetryInitial     string `yaml:"retry_initial"`
-	RetryMax         string `yaml:"retry_max"`
-	MaxAge           string `yaml:"max_age"`
-	HistoryRetention string `yaml:"history_retention"`
-}
-
-func (w *Worker) UnmarshalYAML(node *yaml.Node) error {
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		switch node.Content[i].Value {
-		case "concurrency", "attempt_timeout", "lease_duration", "retry_initial", "retry_max", "max_age", "history_retention":
-		default:
-			return fmt.Errorf("unknown worker setting %q", node.Content[i].Value)
-		}
-	}
-	var raw workerYAML
-	if err := node.Decode(&raw); err != nil {
-		return err
-	}
-	if raw.Concurrency != nil {
-		w.Concurrency = *raw.Concurrency
-	}
-	for _, item := range []struct {
-		value string
-		dest  *time.Duration
-	}{
-		{raw.AttemptTimeout, &w.AttemptTimeout},
-		{raw.LeaseDuration, &w.LeaseDuration},
-		{raw.RetryInitial, &w.RetryInitial},
-		{raw.RetryMax, &w.RetryMax},
-		{raw.MaxAge, &w.MaxAge},
-		{raw.HistoryRetention, &w.HistoryRetention},
-	} {
-		if item.value == "" {
-			continue
-		}
-		value, err := time.ParseDuration(item.value)
-		if err != nil {
-			return fmt.Errorf("invalid worker duration %q: %w", item.value, err)
-		}
-		*item.dest = value
-	}
-	return nil
-}
-
 func Load(path string) (Config, []byte, error) {
 	cfg := Config{
 		Limits: Limits{10 << 20, 100, 64, 10000, 1 << 30},
@@ -150,7 +102,7 @@ func Load(path string) (Config, []byte, error) {
 	if err != nil {
 		return cfg, nil, err
 	}
-	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
 		return cfg, nil, err

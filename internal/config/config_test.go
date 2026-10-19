@@ -65,7 +65,10 @@ worker:
 	require.ErrorContains(t, err, "invalid worker settings")
 	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(data, "concurrency: 2", "unknown_setting: 1", 1)), 0o600))
 	_, _, err = Load(path)
-	require.ErrorContains(t, err, "unknown worker setting")
+	require.ErrorContains(t, err, "unknown_setting")
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(data, "retry_initial: 1s", "retry_initial: invalid", 1)), 0o600))
+	_, _, err = Load(path)
+	require.ErrorContains(t, err, "time.Duration")
 }
 
 func FuzzConfigDecode(f *testing.F) {
