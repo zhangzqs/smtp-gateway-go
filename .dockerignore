@@ -1,0 +1,8 @@
+.git
+.worktrees
+bin
+config.yaml
+*.db
+*.db-shm
+*.db-wal
+coverage.out

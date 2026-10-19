@@ -44,3 +44,28 @@ jobs:
 
       - name: Check binary version
         run: ./bin/smtp-gateway --version
+
+      - name: Build Linux release binaries
+        run: task build-all
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test PostgreSQL and container restart with Testcontainers
+        run: go test -tags=integration -count=1 -timeout=8m ./internal/store ./tests/integration
+
+      - name: Build container image
+        run: docker build -t smtp-gateway-go:ci .
+
+      - name: Check container binary
+        run: docker run --rm --entrypoint /smtp-gateway smtp-gateway-go:ci --version

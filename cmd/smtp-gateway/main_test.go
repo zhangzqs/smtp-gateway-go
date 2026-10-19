@@ -41,9 +41,9 @@ func TestRun(t *testing.T) {
 			wantError: "unknown flag",
 		},
 		{
-			name:      "unexpected argument",
-			args:      []string{"serve"},
-			wantError: `unknown command "serve" for "smtp-gateway"`,
+			name:      "serve requires valid configuration",
+			args:      []string{"serve", "--config", "missing.yaml"},
+			wantError: "missing.yaml",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

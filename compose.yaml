@@ -1,0 +1,19 @@
+services:
+  gateway:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:2525:2525"
+    volumes:
+      - ./config.yaml:/etc/smtp-gateway/config.yaml:ro
+      - gateway-data:/data
+  mailpit:
+    image: axllent/mailpit:v1.27.9
+    profiles: ["debug"]
+    ports:
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
+
+volumes:
+  gateway-data:

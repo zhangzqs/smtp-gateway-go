@@ -28,10 +28,27 @@ tasks:
       - golangci-lint config verify
       - golangci-lint run ./...
 
+  vuln:
+    desc: 扫描已知依赖与 Go 标准库漏洞
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   test:
     desc: 运行单元测试和数据竞争检测
     cmds:
       - go test -race -cover -shuffle=on -count=1 -timeout=3m ./...
+
+  test-nocgo:
+    desc: 在无 CGO 模式下运行 SQLite 与 SMTP 集成测试
+    env:
+      CGO_ENABLED: "0"
+    cmds:
+      - go test -count=1 -timeout=3m ./internal/store ./tests/integration
+
+  integration:
+    desc: 使用 Testcontainers 验证 PostgreSQL 和容器端到端流程（需要 Docker）
+    cmds:
+      - go test -tags=integration -count=1 -timeout=8m ./internal/store ./tests/integration
 
   build:
     desc: 构建无 CGO 的命令行程序
@@ -41,9 +58,20 @@ tasks:
       - mkdir -p bin
       - go build -trimpath -ldflags='-s -w -X main.version={{.VERSION}}' -o bin/smtp-gateway ./cmd/smtp-gateway
 
+  build-all:
+    desc: 构建 Linux amd64 和 arm64 无 CGO 二进制
+    env:
+      CGO_ENABLED: "0"
+    cmds:
+      - mkdir -p bin
+      - GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w -X main.version={{.VERSION}}' -o bin/smtp-gateway-linux-amd64 ./cmd/smtp-gateway
+      - GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w -X main.version={{.VERSION}}' -o bin/smtp-gateway-linux-arm64 ./cmd/smtp-gateway
+
   ci:
     desc: 运行与 GitHub Actions 一致的检查、测试和构建
     cmds:
       - task: check
+      - task: vuln
       - task: test
+      - task: test-nocgo
       - task: build
