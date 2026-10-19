@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -79,6 +78,12 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	apiServer := httptest.NewServer((&api.API{Store: db, Cfg: cfg, Ready: func() bool { return true }}).Handler())
 	t.Cleanup(apiServer.Close)
+	head, err := http.NewRequestWithContext(t.Context(), http.MethodHead, apiServer.URL+"/healthz", nil)
+	require.NoError(t, err)
+	headResponse, err := apiServer.Client().Do(head)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, headResponse.StatusCode)
+	require.NoError(t, headResponse.Body.Close())
 
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, apiServer.URL+"/v1/relay", nil)
 	require.NoError(t, err)
@@ -140,7 +145,7 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	require.NoError(t, data.Close())
 
 	workerCtx, stop := context.WithCancel(context.Background())
-	worker := queue.New(db, cfg.Worker, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	worker := queue.New(db, cfg.Worker)
 	worker.Start(workerCtx)
 	t.Cleanup(func() { stop(); worker.Wait() })
 	require.Eventually(t, func() bool {
@@ -169,4 +174,11 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	require.NoError(t, response.Body.Close())
 	require.Contains(t, string(metrics), "smtp_gateway_accepted_recipients 1")
 	require.Contains(t, string(metrics), "smtp_gateway_retries "+strconv.Itoa(items[0].Recipients[0].Attempts-1))
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodPost, apiServer.URL+"/v1/messages/missing/retry", nil)
+	require.NoError(t, err)
+	request.SetBasicAuth("manager", httpPassword)
+	response, err = apiServer.Client().Do(request)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNotFound, response.StatusCode)
+	require.NoError(t, response.Body.Close())
 }

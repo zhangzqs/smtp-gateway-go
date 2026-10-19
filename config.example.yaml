@@ -1,4 +1,7 @@
 # Local Compose example. Replace every placeholder before starting.
+logger:
+  level: info
+
 http:
   listen: "0.0.0.0:8080"
   basic_auth:

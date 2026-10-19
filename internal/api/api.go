@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
 	"github.com/zhangzqs/smtp-gateway-go/internal/store"
 )
@@ -24,15 +27,19 @@ type API struct {
 }
 
 func (a *API) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("GET /readyz", a.ready)
-	mux.Handle("GET /metrics", a.auth(http.HandlerFunc(a.metrics)))
-	mux.Handle("GET /v1/relay", a.auth(http.HandlerFunc(a.getRelay)))
-	mux.Handle("PUT /v1/relay", a.auth(http.HandlerFunc(a.putRelay)))
-	mux.Handle("GET /v1/messages", a.auth(http.HandlerFunc(a.messages)))
-	mux.Handle("POST /v1/messages/{id}/retry", a.auth(http.HandlerFunc(a.retry)))
-	return mux
+	router := chi.NewRouter()
+	router.Use(middleware.GetHead)
+	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	router.Get("/readyz", a.ready)
+	router.Group(func(r chi.Router) {
+		r.Use(a.auth)
+		r.Get("/metrics", a.metrics)
+		r.Get("/v1/relay", a.getRelay)
+		r.Put("/v1/relay", a.putRelay)
+		r.Get("/v1/messages", a.messages)
+		r.Post("/v1/messages/{id}/retry", a.retry)
+	})
+	return router
 }
 
 func (a *API) auth(next http.Handler) http.Handler {
@@ -164,7 +171,7 @@ func (a *API) messages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) retry(w http.ResponseWriter, r *http.Request) {
-	err := a.Store.Retry(r.Context(), r.PathValue("id"), a.Cfg.Worker.MaxAge, a.Cfg.Worker.HistoryRetention)
+	err := a.Store.Retry(r.Context(), chi.URLParam(r, "id"), a.Cfg.Worker.MaxAge, a.Cfg.Worker.HistoryRetention)
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)

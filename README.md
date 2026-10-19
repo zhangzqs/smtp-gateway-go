@@ -14,7 +14,7 @@ go run ./cmd/smtp-gateway serve --config config.yaml
 
 本机直接运行时，将 `database.dsn` 改成可写的本地路径，例如 `./gateway.db`。也可以运行 `docker compose up --build`，此时保留示例中的 `/data/gateway.db`。Compose 仅将 HTTP 和 SMTP 端口发布到宿主机回环地址，并将 SQLite 数据库保存在命名卷中。示例配置显式允许本机开发使用明文 SMTP AUTH；生产部署应配置 SMTP `starttls` 或 `implicit` TLS，并通过 HTTPS 或受控反向代理访问管理 API。
 
-配置文件包含 HTTP/SMTP 监听与独立凭据、数据库驱动及 DSN、Base64 编码的 32 字节加密密钥、队列限额和 Worker 参数。PostgreSQL 由部署环境先创建数据库及账号；将 `database.driver` 改成 `postgres` 并填写连接串。多个实例必须使用相同的静态配置和加密密钥。数据库 schema 在启动时迁移；迁移失败则停止启动。
+配置文件包含 HTTP/SMTP 监听与独立凭据、数据库驱动及 DSN、Base64 编码的 32 字节加密密钥、队列限额和 Worker 参数。`logger.level` 可设为 `trace`、`debug`、`info`、`warn` 或 `error`，默认为 `info`；启动时会严格校验配置字段和值。PostgreSQL 由部署环境先创建数据库及账号；将 `database.driver` 改成 `postgres` 并填写连接串。多个实例必须使用相同的静态配置和加密密钥。数据库 schema 在启动时迁移；迁移失败则停止启动。
 
 无上游配置时仍可启动和管理，SMTP 提交返回临时错误。可通过 API 配置上游，或在配置文件中写入完整 `relay` 对象。文件配置优先，API 返回 `read_only=true` 并拒绝 PUT；移除文件中的 `relay` 后，原先保存在数据库里的 API 配置再次生效。文件变更需要重启，API 更新对下一次投递尝试立即生效。
 

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/mail"
 	"os"
@@ -43,6 +44,14 @@ type Database struct {
 	DSN    string `yaml:"dsn"`
 }
 
+type Security struct {
+	EncryptionKey string `yaml:"encryption_key"`
+}
+
+type Logger struct {
+	Level string `yaml:"level"`
+}
+
 type Limits struct {
 	MaxMessageBytes  int64 `yaml:"max_message_bytes"`
 	MaxRecipients    int   `yaml:"max_recipients"`
@@ -75,12 +84,11 @@ type Config struct {
 	HTTP     HTTP     `yaml:"http"`
 	SMTP     SMTP     `yaml:"smtp"`
 	Database Database `yaml:"database"`
-	Security struct {
-		EncryptionKey string `yaml:"encryption_key"`
-	} `yaml:"security"`
-	Limits Limits `yaml:"limits"`
-	Worker Worker `yaml:"worker"`
-	Relay  *Relay `yaml:"relay"`
+	Security Security `yaml:"security"`
+	Logger   Logger   `yaml:"logger"`
+	Limits   Limits   `yaml:"limits"`
+	Worker   Worker   `yaml:"worker"`
+	Relay    *Relay   `yaml:"relay"`
 }
 
 type workerYAML struct {
@@ -132,56 +140,109 @@ func (w *Worker) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func Load(path string) (Config, []byte, error) {
-	var cfg Config
+	cfg := Config{
+		Limits: Limits{10 << 20, 100, 64, 10000, 1 << 30},
+		Worker: Worker{4, time.Minute, 2 * time.Minute, 30 * time.Second, 15 * time.Minute, 24 * time.Hour, 7 * 24 * time.Hour},
+		Logger: Logger{Level: "info"},
+	}
 	// #nosec G304 -- the CLI caller explicitly chooses the configuration path.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, nil, err
 	}
-	cfg.Limits = Limits{10 << 20, 100, 64, 10000, 1 << 30}
-	cfg.Worker = Worker{4, time.Minute, 2 * time.Minute, 30 * time.Second, 15 * time.Minute, 24 * time.Hour, 7 * 24 * time.Hour}
 	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
 		return cfg, nil, err
 	}
-	key, err := base64.StdEncoding.DecodeString(cfg.Security.EncryptionKey)
-	if err != nil || len(key) != 32 {
-		return cfg, nil, errors.New("security.encryption_key must be base64-encoded 32 bytes")
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return cfg, nil, errors.New("configuration must contain exactly one YAML document")
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, nil, err
 	}
-	return cfg, key, nil
+	key, err := cfg.Security.Key()
+	return cfg, key, err
 }
 
 func (c Config) Validate() error {
-	if c.HTTP.Listen == "" || c.SMTP.Listen == "" || c.SMTP.Hostname == "" || c.Database.DSN == "" {
-		return errors.New("HTTP, SMTP, and database settings are required")
-	}
-	if c.Database.Driver != "sqlite" && c.Database.Driver != "postgres" {
-		return errors.New("database.driver must be sqlite or postgres")
-	}
-	if c.HTTP.BasicAuth.Username == "" || c.HTTP.BasicAuth.Password == "" || c.SMTP.Auth.Username == "" || c.SMTP.Auth.Password == "" {
-		return errors.New("HTTP Basic Auth and SMTP AUTH credentials are required")
-	}
-	if c.Limits.MaxMessageBytes <= 0 || c.Limits.MaxMessageBytes == math.MaxInt64 || c.Limits.MaxRecipients <= 0 || c.Limits.MaxConnections <= 0 || c.Limits.MaxQueueMessages <= 0 || c.Limits.MaxQueueBytes <= 0 {
-		return errors.New("all limits must be positive")
-	}
-	if c.Worker.Concurrency <= 0 || c.Worker.AttemptTimeout <= 0 || c.Worker.LeaseDuration <= c.Worker.AttemptTimeout || c.Worker.RetryInitial <= 0 || c.Worker.RetryMax < c.Worker.RetryInitial || c.Worker.MaxAge <= 0 || c.Worker.HistoryRetention <= 0 {
-		return errors.New("invalid worker settings")
-	}
-	if err := validateTLS(c.SMTP.TLS, true); err != nil {
-		return err
-	}
-	if (c.SMTP.TLS.Mode == "" || c.SMTP.TLS.Mode == "none") && !c.SMTP.AllowInsecureAuth {
-		return errors.New("SMTP TLS is required unless allow_insecure_auth is explicitly enabled")
-	}
-	if err := validateTLS(c.HTTP.TLS, false); err != nil {
-		return err
+	for _, validate := range []func() error{
+		c.HTTP.Validate, c.SMTP.Validate, c.Database.Validate, c.Security.Validate,
+		c.Logger.Validate, c.Limits.Validate, c.Worker.Validate,
+	} {
+		if err := validate(); err != nil {
+			return err
+		}
 	}
 	if c.Relay != nil {
 		return c.Relay.Validate()
+	}
+	return nil
+}
+
+func (h HTTP) Validate() error {
+	if h.Listen == "" || h.BasicAuth.Username == "" || h.BasicAuth.Password == "" {
+		return errors.New("http.listen and http.basic_auth credentials are required")
+	}
+	return validateTLS(h.TLS, false)
+}
+
+func (s SMTP) Validate() error {
+	if s.Listen == "" || s.Hostname == "" || s.Auth.Username == "" || s.Auth.Password == "" {
+		return errors.New("smtp.listen, smtp.hostname, and smtp.auth credentials are required")
+	}
+	if err := validateTLS(s.TLS, true); err != nil {
+		return err
+	}
+	if (s.TLS.Mode == "" || s.TLS.Mode == "none") && !s.AllowInsecureAuth {
+		return errors.New("SMTP TLS is required unless allow_insecure_auth is explicitly enabled")
+	}
+	return nil
+}
+
+func (d Database) Validate() error {
+	if d.Driver != "sqlite" && d.Driver != "postgres" {
+		return errors.New("database.driver must be sqlite or postgres")
+	}
+	if d.DSN == "" {
+		return errors.New("database.dsn is required")
+	}
+	return nil
+}
+
+func (s Security) Validate() error {
+	_, err := s.Key()
+	return err
+}
+
+func (s Security) Key() ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(s.EncryptionKey)
+	if err != nil || len(key) != 32 {
+		return nil, errors.New("security.encryption_key must be base64-encoded 32 bytes")
+	}
+	return key, nil
+}
+
+func (l Logger) Validate() error {
+	switch l.Level {
+	case "trace", "debug", "info", "warn", "error":
+		return nil
+	default:
+		return errors.New("logger.level must be trace, debug, info, warn, or error")
+	}
+}
+
+func (l Limits) Validate() error {
+	if l.MaxMessageBytes <= 0 || l.MaxMessageBytes == math.MaxInt64 || l.MaxRecipients <= 0 || l.MaxConnections <= 0 || l.MaxQueueMessages <= 0 || l.MaxQueueBytes <= 0 {
+		return errors.New("all limits must be positive")
+	}
+	return nil
+}
+
+func (w Worker) Validate() error {
+	if w.Concurrency <= 0 || w.AttemptTimeout <= 0 || w.LeaseDuration <= w.AttemptTimeout || w.RetryInitial <= 0 || w.RetryMax < w.RetryInitial || w.MaxAge <= 0 || w.HistoryRetention <= 0 {
+		return errors.New("invalid worker settings")
 	}
 	return nil
 }

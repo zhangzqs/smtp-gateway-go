@@ -4,11 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"log/slog"
 	"math/big"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
 	"github.com/zhangzqs/smtp-gateway-go/internal/relay"
@@ -18,15 +19,14 @@ import (
 type Worker struct {
 	Store         *store.Store
 	Config        config.Worker
-	log           *slog.Logger
 	wg            sync.WaitGroup
 	attempts      atomic.Int64
 	durationNanos atomic.Int64
 	stopClaims    context.CancelFunc
 }
 
-func New(s *store.Store, cfg config.Worker, log *slog.Logger) *Worker {
-	return &Worker{Store: s, Config: cfg, log: log}
+func New(s *store.Store, cfg config.Worker) *Worker {
+	return &Worker{Store: s, Config: cfg}
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -47,10 +47,10 @@ func (w *Worker) maintain(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		if err := w.Store.Expire(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			w.log.Error("expire queue", "error", err)
+			zerolog.Ctx(ctx).Error().Err(err).Msg("expire queue")
 		}
 		if err := w.Store.Cleanup(ctx, w.Config.HistoryRetention); err != nil && !errors.Is(err, context.Canceled) {
-			w.log.Error("cleanup queue", "error", err)
+			zerolog.Ctx(ctx).Error().Err(err).Msg("cleanup queue")
 		}
 		select {
 		case <-ctx.Done():
@@ -77,7 +77,7 @@ func (w *Worker) loop(ctx, claimCtx context.Context) {
 		}
 		claim, err := w.Store.Claim(claimCtx, w.Config.LeaseDuration)
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, store.ErrNoClaim) {
-			w.log.Error("claim queue", "error", err)
+			zerolog.Ctx(ctx).Error().Err(err).Msg("claim queue")
 		}
 		if claim != nil {
 			w.deliver(ctx, claim)
@@ -133,10 +133,10 @@ func (w *Worker) deliver(ctx context.Context, claim *store.Claimed) {
 	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	if err := w.Store.Complete(commitCtx, claim, results); err != nil {
-		w.log.Error("complete delivery", "message_id", claim.ID, "error", err)
+		zerolog.Ctx(ctx).Error().Err(err).Str("message_id", claim.ID).Msg("complete delivery")
 		return
 	}
-	w.log.Info("delivery attempt", "message_id", claim.ID, "recipients", len(results))
+	zerolog.Ctx(ctx).Info().Str("message_id", claim.ID).Int("recipients", len(results)).Msg("delivery attempt")
 }
 
 func backoff(cfg config.Worker, attempts int) time.Duration {
