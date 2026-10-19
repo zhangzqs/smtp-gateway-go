@@ -1,0 +1,49 @@
+version: "3"
+
+vars:
+  VERSION:
+    sh: git describe --tags --always --dirty
+
+tasks:
+  default:
+    desc: 列出开发任务
+    cmds:
+      - task --list
+
+  tidy:
+    desc: 整理 Go 模块依赖
+    cmds:
+      - go mod tidy
+
+  fix:
+    desc: 格式化代码并修复可自动处理的 lint 问题
+    cmds:
+      - golangci-lint fmt
+      - golangci-lint run --fix ./...
+
+  check:
+    desc: 检查模块依赖、lint 配置和代码
+    cmds:
+      - go mod tidy -diff
+      - golangci-lint config verify
+      - golangci-lint run ./...
+
+  test:
+    desc: 运行单元测试和数据竞争检测
+    cmds:
+      - go test -race -cover -shuffle=on -count=1 -timeout=3m ./...
+
+  build:
+    desc: 构建无 CGO 的命令行程序
+    env:
+      CGO_ENABLED: "0"
+    cmds:
+      - mkdir -p bin
+      - go build -trimpath -ldflags='-s -w -X main.version={{.VERSION}}' -o bin/smtp-gateway ./cmd/smtp-gateway
+
+  ci:
+    desc: 运行与 GitHub Actions 一致的检查、测试和构建
+    cmds:
+      - task: check
+      - task: test
+      - task: build
