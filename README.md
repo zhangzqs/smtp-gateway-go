@@ -3,7 +3,7 @@
 轻量 SMTP 网关，计划提供配置 API、SQLite/PostgreSQL 持久邮件队列和自动重试。
 完整需求与验收方案见 [设计 issue #2](https://github.com/zhangzqs/smtp-gateway-go/issues/2)。
 
-当前阶段是项目骨架：已提供命令入口、单元测试、lint 和 CI。
+当前阶段是项目骨架：已提供 Cobra 命令入口、单元测试、lint 和 CI。
 SMTP 接收、HTTP 管理接口和持久队列尚未实现。
 
 ## 开发环境

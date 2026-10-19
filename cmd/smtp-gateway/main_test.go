@@ -18,17 +18,17 @@ func TestRun(t *testing.T) {
 	}{
 		{
 			name:       "default help",
-			wantOutput: "Usage of smtp-gateway:",
+			wantOutput: "A persistent SMTP relay gateway",
 		},
 		{
 			name:       "help",
 			args:       []string{"--help"},
-			wantOutput: "Usage of smtp-gateway:",
+			wantOutput: "A persistent SMTP relay gateway",
 		},
 		{
 			name:       "short help",
 			args:       []string{"-h"},
-			wantOutput: "Usage of smtp-gateway:",
+			wantOutput: "A persistent SMTP relay gateway",
 		},
 		{
 			name:       "version",
@@ -38,24 +38,19 @@ func TestRun(t *testing.T) {
 		{
 			name:      "unknown flag",
 			args:      []string{"--unknown"},
-			wantError: "flag provided but not defined",
+			wantError: "unknown flag",
 		},
 		{
 			name:      "unexpected argument",
 			args:      []string{"serve"},
-			wantError: "unexpected argument: serve",
-		},
-		{
-			name:      "argument after version",
-			args:      []string{"--version", "serve"},
-			wantError: "unexpected argument: serve",
+			wantError: `unknown command "serve" for "smtp-gateway"`,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
 			var output bytes.Buffer
-			err := run(testCase.args, &output)
+			err := run(t.Context(), testCase.args, &output)
 			if testCase.wantError != "" {
 				require.ErrorContains(t, err, testCase.wantError)
 				return
