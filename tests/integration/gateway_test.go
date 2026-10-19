@@ -22,6 +22,7 @@ import (
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/api"
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/database"
 	"github.com/zhangzqs/smtp-gateway-go/internal/queue"
 	"github.com/zhangzqs/smtp-gateway-go/internal/service"
 	"github.com/zhangzqs/smtp-gateway-go/internal/smtpd"
@@ -74,7 +75,9 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	cfg.SMTP.Auth = config.Credentials{Username: "client", Password: smtpPassword}
 	cfg.Limits = config.Limits{MaxMessageBytes: 1 << 20, MaxRecipients: 10, MaxConnections: 10, MaxQueueMessages: 10, MaxQueueBytes: 10 << 20}
 	cfg.Worker = config.Worker{Concurrency: 1, AttemptTimeout: 5 * time.Second, LeaseDuration: 10 * time.Second, RetryInitial: 100 * time.Millisecond, RetryMax: time.Second, MaxAge: time.Minute, HistoryRetention: time.Hour}
-	db, err := store.Open(t.Context(), cfg, key)
+	databaseResource, err := database.New(t.Context(), cfg.Database)
+	require.NoError(t, err)
+	db, err := store.New(t.Context(), databaseResource, cfg, key)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	managementAPI := &api.API{Service: service.New(db, cfg, func() bool { return true }), Auth: cfg.HTTP.BasicAuth}

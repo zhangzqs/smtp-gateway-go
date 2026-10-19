@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	stdlog "log"
 	"net/http"
@@ -14,7 +13,9 @@ import (
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/api"
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
-	"github.com/zhangzqs/smtp-gateway-go/internal/infra"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/database"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/listener"
+	loggerinfra "github.com/zhangzqs/smtp-gateway-go/internal/infra/logger"
 	"github.com/zhangzqs/smtp-gateway-go/internal/queue"
 	"github.com/zhangzqs/smtp-gateway-go/internal/service"
 	"github.com/zhangzqs/smtp-gateway-go/internal/smtpd"
@@ -32,12 +33,16 @@ func New(cfg config.Config, key []byte) *Gateway {
 
 func (g *Gateway) Run(ctx context.Context) error {
 	cfg := g.config
-	logger, err := infra.NewLogger(cfg.Logger)
+	logger, err := loggerinfra.New(cfg.Logger)
 	if err != nil {
 		return err
 	}
 	ctx = logger.WithContext(ctx)
-	db, err := store.Open(ctx, cfg, g.key)
+	databaseResource, err := database.New(ctx, cfg.Database)
+	if err != nil {
+		return err
+	}
+	db, err := store.New(ctx, databaseResource, cfg, g.key)
 	if err != nil {
 		return err
 	}
@@ -57,31 +62,17 @@ func (g *Gateway) Run(ctx context.Context) error {
 	smtpServer.AllowInsecureAuth = cfg.SMTP.AllowInsecureAuth
 	smtpServer.ReadTimeout = 5 * time.Minute
 	smtpServer.WriteTimeout = 5 * time.Minute
-	var smtpTLS *tls.Config
-	if cfg.SMTP.TLS.Mode != "" && cfg.SMTP.TLS.Mode != "none" {
-		smtpTLS, err = infra.TLSConfig(cfg.SMTP.TLS)
-		if err != nil {
-			return err
-		}
-	}
-	smtpServer.TLSConfig = smtpTLS
-	var httpTLS *tls.Config
-	if cfg.HTTP.TLS.Mode == "implicit" {
-		httpTLS, err = infra.TLSConfig(cfg.HTTP.TLS)
-		if err != nil {
-			return err
-		}
-	}
-	httpListener, err := infra.Listen(ctx, cfg.HTTP.Listen, httpTLS, cfg.HTTP.TLS.Mode == "implicit")
+	httpListener, err := listener.New(ctx, listener.Config{Addr: cfg.HTTP.Listen, TLS: cfg.HTTP.TLS})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = httpListener.Close() }()
-	smtpListener, err := infra.Listen(ctx, cfg.SMTP.Listen, smtpTLS, cfg.SMTP.TLS.Mode == "implicit")
+	smtpListener, err := listener.New(ctx, listener.Config{Addr: cfg.SMTP.Listen, TLS: cfg.SMTP.TLS})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = smtpListener.Close() }()
+	smtpServer.TLSConfig = smtpListener.TLSConfig()
 	workerCtx, cancelWorkers := context.WithCancel(context.WithoutCancel(ctx))
 	worker := queue.New(db, cfg.Worker)
 	apiServer.DeliveryDuration = worker.DeliveryDuration()

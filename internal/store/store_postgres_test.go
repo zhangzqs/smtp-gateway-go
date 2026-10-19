@@ -32,8 +32,7 @@ func TestPostgresQueueContract(t *testing.T) {
 	_, err = rand.Read(key)
 	require.NoError(t, err)
 	cfg := config.Config{Database: config.Database{Driver: "postgres", DSN: dsn}}
-	s, err := Open(t.Context(), cfg, key)
-	require.NoError(t, err)
+	s := openStore(t, cfg, key)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	runQueueContract(t, s, cfg, key)
 }

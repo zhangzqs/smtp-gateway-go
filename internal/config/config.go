@@ -12,6 +12,10 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/database"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/listener"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/logger"
 )
 
 type Credentials struct {
@@ -19,11 +23,7 @@ type Credentials struct {
 	Password string `yaml:"password"`
 }
 
-type TLS struct {
-	Mode     string `yaml:"mode"`
-	CertFile string `yaml:"cert_file"`
-	KeyFile  string `yaml:"key_file"`
-}
+type TLS = listener.TLS
 
 type HTTP struct {
 	Listen    string      `yaml:"listen"`
@@ -39,18 +39,13 @@ type SMTP struct {
 	AllowInsecureAuth bool        `yaml:"allow_insecure_auth"`
 }
 
-type Database struct {
-	Driver string `yaml:"driver"`
-	DSN    string `yaml:"dsn"`
-}
+type Database = database.Config
 
 type Security struct {
 	EncryptionKey string `yaml:"encryption_key"`
 }
 
-type Logger struct {
-	Level string `yaml:"level"`
-}
+type Logger = logger.Config
 
 type Limits struct {
 	MaxMessageBytes  int64 `yaml:"max_message_bytes"`
@@ -137,28 +132,21 @@ func (h HTTP) Validate() error {
 	if h.Listen == "" || h.BasicAuth.Username == "" || h.BasicAuth.Password == "" {
 		return errors.New("http.listen and http.basic_auth credentials are required")
 	}
-	return validateTLS(h.TLS, false)
+	if h.TLS.Mode == "starttls" {
+		return errors.New("invalid listener TLS mode")
+	}
+	return h.TLS.Validate()
 }
 
 func (s SMTP) Validate() error {
 	if s.Listen == "" || s.Hostname == "" || s.Auth.Username == "" || s.Auth.Password == "" {
 		return errors.New("smtp.listen, smtp.hostname, and smtp.auth credentials are required")
 	}
-	if err := validateTLS(s.TLS, true); err != nil {
+	if err := s.TLS.Validate(); err != nil {
 		return err
 	}
 	if (s.TLS.Mode == "" || s.TLS.Mode == "none") && !s.AllowInsecureAuth {
 		return errors.New("SMTP TLS is required unless allow_insecure_auth is explicitly enabled")
-	}
-	return nil
-}
-
-func (d Database) Validate() error {
-	if d.Driver != "sqlite" && d.Driver != "postgres" {
-		return errors.New("database.driver must be sqlite or postgres")
-	}
-	if d.DSN == "" {
-		return errors.New("database.dsn is required")
 	}
 	return nil
 }
@@ -176,15 +164,6 @@ func (s Security) Key() ([]byte, error) {
 	return key, nil
 }
 
-func (l Logger) Validate() error {
-	switch l.Level {
-	case "trace", "debug", "info", "warn", "error":
-		return nil
-	default:
-		return errors.New("logger.level must be trace, debug, info, warn, or error")
-	}
-}
-
 func (l Limits) Validate() error {
 	if l.MaxMessageBytes <= 0 || l.MaxMessageBytes == math.MaxInt64 || l.MaxRecipients <= 0 || l.MaxConnections <= 0 || l.MaxQueueMessages <= 0 || l.MaxQueueBytes <= 0 {
 		return errors.New("all limits must be positive")
@@ -195,19 +174,6 @@ func (l Limits) Validate() error {
 func (w Worker) Validate() error {
 	if w.Concurrency <= 0 || w.AttemptTimeout <= 0 || w.LeaseDuration <= w.AttemptTimeout || w.RetryInitial <= 0 || w.RetryMax < w.RetryInitial || w.MaxAge <= 0 || w.HistoryRetention <= 0 {
 		return errors.New("invalid worker settings")
-	}
-	return nil
-}
-
-func validateTLS(t TLS, smtp bool) error {
-	if t.Mode == "" || t.Mode == "none" {
-		return nil
-	}
-	if (smtp && t.Mode != "starttls" && t.Mode != "implicit") || (!smtp && t.Mode != "implicit") {
-		return errors.New("invalid listener TLS mode")
-	}
-	if t.CertFile == "" || t.KeyFile == "" {
-		return errors.New("TLS certificate and key files are required")
 	}
 	return nil
 }

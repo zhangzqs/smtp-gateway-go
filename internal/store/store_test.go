@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"path/filepath"
@@ -12,7 +11,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/database"
 )
+
+func openStore(t *testing.T, cfg config.Config, key []byte) *Store {
+	t.Helper()
+	resource, err := database.New(t.Context(), cfg.Database)
+	require.NoError(t, err)
+	s, err := New(t.Context(), resource, cfg, key)
+	require.NoError(t, err)
+	return s
+}
 
 func testStore(t *testing.T) (*Store, config.Config, []byte) {
 	t.Helper()
@@ -20,8 +29,7 @@ func testStore(t *testing.T) (*Store, config.Config, []byte) {
 	_, err := rand.Read(key)
 	require.NoError(t, err)
 	cfg := config.Config{Database: config.Database{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "gateway.db")}}
-	s, err := Open(t.Context(), cfg, key)
-	require.NoError(t, err)
+	s := openStore(t, cfg, key)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	return s, cfg, key
 }
@@ -65,8 +73,7 @@ func TestFileRelayOverridesDatabaseWithoutDeletingIt(t *testing.T) {
 	require.NoError(t, s.Close())
 	fileRelay := config.Relay{Host: "file.example.com", Port: 25, TLS: "none", FromAddress: "file@example.com"}
 	cfg.Relay = &fileRelay
-	fileManaged, err := Open(t.Context(), cfg, key)
-	require.NoError(t, err)
+	fileManaged := openStore(t, cfg, key)
 	actual, view, err := fileManaged.Relay(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, fileRelay, actual)
@@ -75,8 +82,7 @@ func TestFileRelayOverridesDatabaseWithoutDeletingIt(t *testing.T) {
 	require.ErrorIs(t, err, ErrReadOnly)
 	require.NoError(t, fileManaged.Close())
 	cfg.Relay = nil
-	restored, err := Open(t.Context(), cfg, key)
-	require.NoError(t, err)
+	restored := openStore(t, cfg, key)
 	t.Cleanup(func() { _ = restored.Close() })
 	actual, view, err = restored.Relay(t.Context())
 	require.NoError(t, err)
@@ -143,8 +149,7 @@ func runQueueContract(t *testing.T, s *Store, cfg config.Config, key []byte) {
 	require.Equal(t, Pending, items[0].Recipients[1].Status)
 	// A second process can open the same durable queue after a restart.
 	require.NoError(t, s.Close())
-	reopened, err := Open(context.Background(), cfg, key)
-	require.NoError(t, err)
+	reopened := openStore(t, cfg, key)
 	t.Cleanup(func() { _ = reopened.Close() })
 	items, err = reopened.List(t.Context(), "", 10, 0)
 	require.NoError(t, err)

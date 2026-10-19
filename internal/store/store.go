@@ -10,13 +10,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pressly/goose/v3"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-	_ "modernc.org/sqlite"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
+	"github.com/zhangzqs/smtp-gateway-go/internal/infra/database"
 )
 
 //go:embed migrations/*/*.sql
@@ -68,58 +65,26 @@ type MessageStatus struct {
 type Store struct {
 	DB            *gorm.DB
 	SQL           *sql.DB
+	resource      *database.Database
 	driver        string
 	key           []byte
 	fileRelay     *config.Relay
 	writeFailures atomic.Int64
 }
 
-func Open(ctx context.Context, cfg config.Config, key []byte) (*Store, error) {
-	var sqlDB *sql.DB
-	var dialector gorm.Dialector
-	var err error
-	if cfg.Database.Driver == "sqlite" {
-		sqlDB, err = sql.Open("sqlite", cfg.Database.DSN)
-		if err != nil {
-			return nil, err
-		}
-		sqlDB.SetMaxOpenConns(1)
-		for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=5000"} {
-			if _, err := sqlDB.ExecContext(ctx, pragma); err != nil {
-				_ = sqlDB.Close()
-				return nil, err
-			}
-		}
-		dialector = sqlite.New(sqlite.Config{Conn: sqlDB})
-	} else {
-		dialector = postgres.Open(cfg.Database.DSN)
-	}
-	db, err := gorm.Open(dialector, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		if sqlDB != nil {
-			_ = sqlDB.Close()
-		}
-		return nil, errors.New("database connection failed")
-	}
-	if sqlDB == nil {
-		sqlDB, err = db.DB()
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := sqlDB.PingContext(ctx); err != nil {
-		_ = sqlDB.Close()
-		return nil, errors.New("database connection failed")
-	}
+// New initializes the queue schema and takes ownership of the database resource.
+func New(ctx context.Context, resource *database.Database, cfg config.Config, key []byte) (*Store, error) {
+	sqlDB := resource.SQL()
 	goose.SetBaseFS(migrations)
-	if err := goose.SetDialect(cfg.Database.Driver); err != nil {
-		_ = sqlDB.Close()
+	if err := goose.SetDialect(resource.Driver()); err != nil {
+		_ = resource.Close()
 		return nil, err
 	}
-	if cfg.Database.Driver == "postgres" {
+	var err error
+	if resource.Driver() == "postgres" {
 		lock, lockErr := sqlDB.Conn(ctx)
 		if lockErr != nil {
-			_ = sqlDB.Close()
+			_ = resource.Close()
 			return nil, lockErr
 		}
 		_, err = lock.ExecContext(ctx, "SELECT pg_advisory_lock(782935011)")
@@ -135,13 +100,13 @@ func Open(ctx context.Context, cfg config.Config, key []byte) (*Store, error) {
 		err = goose.UpContext(ctx, sqlDB, "migrations/sqlite")
 	}
 	if err != nil {
-		_ = sqlDB.Close()
+		_ = resource.Close()
 		return nil, errors.New("database migration failed")
 	}
-	return &Store{DB: db, SQL: sqlDB, driver: cfg.Database.Driver, key: key, fileRelay: cfg.Relay}, nil
+	return &Store{DB: resource.DB(), SQL: sqlDB, resource: resource, driver: resource.Driver(), key: key, fileRelay: cfg.Relay}, nil
 }
 
-func (s *Store) Close() error { return s.SQL.Close() }
+func (s *Store) Close() error { return s.resource.Close() }
 
 func (s *Store) Ready(ctx context.Context) error { return s.SQL.PingContext(ctx) }
 
