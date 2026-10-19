@@ -11,17 +11,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
 	"github.com/zhangzqs/smtp-gateway-go/internal/service"
 )
 
 type API struct {
-	Service          *service.Service
-	Auth             config.Credentials
-	DeliveryDuration prometheus.Summary
+	Service        *service.Service
+	Auth           config.Credentials
+	MetricsHandler http.Handler
 }
 
 func (a *API) Handler() http.Handler {
@@ -31,7 +29,7 @@ func (a *API) Handler() http.Handler {
 	router.Get("/readyz", a.ready)
 	router.Group(func(r chi.Router) {
 		r.Use(a.auth)
-		r.Get("/metrics", a.metrics)
+		r.Method(http.MethodGet, "/metrics", a.MetricsHandler)
 		r.Get("/v1/relay", a.getRelay)
 		r.Put("/v1/relay", a.putRelay)
 		r.Get("/v1/messages", a.messages)
@@ -180,41 +178,4 @@ func (a *API) retry(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 	}
-}
-
-func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := a.Service.Metrics(r.Context())
-	if err != nil {
-		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	registry := prometheus.NewRegistry()
-	for _, item := range []struct {
-		name  string
-		help  string
-		value int64
-	}{
-		{"smtp_gateway_pending_recipients", "Pending recipients in the queue.", snapshot.Pending},
-		{"smtp_gateway_pending_bytes", "Bytes in messages with pending recipients.", snapshot.Bytes},
-		{"smtp_gateway_oldest_pending_seconds", "Age of the oldest pending message in seconds.", snapshot.OldestPendingSeconds},
-		{"smtp_gateway_in_flight_messages", "Messages currently leased for delivery.", snapshot.InFlight},
-		{"smtp_gateway_accepted_recipients", "Recipients accepted by the upstream relay.", snapshot.Accepted},
-		{"smtp_gateway_failed_recipients", "Recipients permanently rejected by the upstream relay.", snapshot.Failed},
-		{"smtp_gateway_expired_recipients", "Recipients whose delivery window expired.", snapshot.Expired},
-		{"smtp_gateway_retries", "Retry attempts retained in the queue.", snapshot.Retries},
-	} {
-		metric := prometheus.NewGauge(prometheus.GaugeOpts{Name: item.name, Help: item.help})
-		metric.Set(float64(item.value))
-		registry.MustRegister(metric)
-	}
-	failures := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "smtp_gateway_database_write_failures_total",
-		Help: "Database write failures while accepting messages.",
-	})
-	failures.Add(float64(snapshot.DBWriteFailures))
-	registry.MustRegister(failures)
-	if a.DeliveryDuration != nil {
-		registry.MustRegister(a.DeliveryDuration)
-	}
-	promhttp.HandlerFor(registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
 }

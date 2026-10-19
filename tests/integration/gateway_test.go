@@ -18,6 +18,9 @@ import (
 
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zhangzqs/smtp-gateway-go/internal/api"
@@ -80,7 +83,15 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	db, err := store.New(t.Context(), databaseResource, cfg, key)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	managementAPI := &api.API{Service: service.New(db, cfg, func() bool { return true }), Auth: cfg.HTTP.BasicAuth}
+	management := service.New(db, cfg, func() bool { return true })
+	worker := queue.New(db, cfg.Worker)
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(service.NewMetricsCollector(management, zerolog.Nop()), worker.DeliveryDuration())
+	managementAPI := &api.API{
+		Service:        management,
+		Auth:           cfg.HTTP.BasicAuth,
+		MetricsHandler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
+	}
 	apiServer := httptest.NewServer(managementAPI.Handler())
 	t.Cleanup(apiServer.Close)
 	head, err := http.NewRequestWithContext(t.Context(), http.MethodHead, apiServer.URL+"/healthz", nil)
@@ -155,10 +166,18 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	_, err = data.Write([]byte("From: original@example.com\r\nSubject: Hi\r\n\r\nbody\r\n"))
 	require.NoError(t, err)
 	require.NoError(t, data.Close())
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, apiServer.URL+"/metrics", nil)
+	require.NoError(t, err)
+	request.SetBasicAuth("manager", httpPassword)
+	response, err = apiServer.Client().Do(request)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	metrics, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Contains(t, string(metrics), "smtp_gateway_pending_recipients 1")
 
 	workerCtx, stop := context.WithCancel(context.Background())
-	worker := queue.New(db, cfg.Worker)
-	managementAPI.DeliveryDuration = worker.DeliveryDuration()
 	worker.Start(workerCtx)
 	t.Cleanup(func() { stop(); worker.Wait() })
 	require.Eventually(t, func() bool {
@@ -182,7 +201,7 @@ func TestSMTPSubmissionRetryAndAPI(t *testing.T) {
 	response, err = apiServer.Client().Do(request)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, response.StatusCode)
-	metrics, err := io.ReadAll(response.Body)
+	metrics, err = io.ReadAll(response.Body)
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
 	require.Contains(t, string(metrics), "smtp_gateway_accepted_recipients 1")

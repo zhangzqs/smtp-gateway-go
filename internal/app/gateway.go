@@ -6,6 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/zhangzqs/smtp-gateway-go/internal/api"
 	"github.com/zhangzqs/smtp-gateway-go/internal/config"
 	"github.com/zhangzqs/smtp-gateway-go/internal/infra/database"
@@ -47,7 +50,15 @@ func (g *Gateway) Run(ctx context.Context) error {
 		return err
 	}
 	var ready atomic.Bool
-	apiServer := &api.API{Service: service.New(db, cfg, ready.Load), Auth: cfg.HTTP.BasicAuth}
+	management := service.New(db, cfg, ready.Load)
+	worker := queue.New(db, cfg.Worker)
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(service.NewMetricsCollector(management, logger), worker.DeliveryDuration())
+	apiServer := &api.API{
+		Service:        management,
+		Auth:           cfg.HTTP.BasicAuth,
+		MetricsHandler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
+	}
 	httpServer, err := httpserver.New(ctx, httpserver.Options{Addr: cfg.HTTP.Listen, TLS: cfg.HTTP.TLS, Handler: apiServer.Handler()})
 	if err != nil {
 		return err
@@ -68,8 +79,6 @@ func (g *Gateway) Run(ctx context.Context) error {
 	}
 	defer func() { _ = smtpServer.Close() }()
 	workerCtx, cancelWorkers := context.WithCancel(context.WithoutCancel(ctx))
-	worker := queue.New(db, cfg.Worker)
-	apiServer.DeliveryDuration = worker.DeliveryDuration()
 	worker.Start(workerCtx)
 	defer func() {
 		cancelWorkers()
