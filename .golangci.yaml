@@ -31,7 +31,7 @@ linters:
         - diagnostic # 启用诊断类检查，发现可疑表达式和控制流。
     gomoddirectives:
       # Go 版本与 go.mod 保持一致。
-      go-version-pattern: '^1\.27\.1$'
+      go-version-pattern: '^1\.27\.2$'
     govet:
       # standard 启用了 govet，但下面这些分析器需要额外开启。
       enable:

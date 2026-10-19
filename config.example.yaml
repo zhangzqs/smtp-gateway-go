@@ -1,0 +1,52 @@
+# Local Compose example. Replace every placeholder before starting.
+http:
+  listen: "0.0.0.0:8080"
+  basic_auth:
+    username: manager
+    password: "<set-a-unique-management-password>"
+
+smtp:
+  listen: "0.0.0.0:2525"
+  hostname: smtp-gateway
+  auth:
+    username: mail-client
+    password: "<set-a-unique-submission-password>"
+  tls:
+    mode: none
+  # Local loopback development only. Production should use STARTTLS or implicit TLS.
+  allow_insecure_auth: true
+
+database:
+  driver: sqlite
+  dsn: /data/gateway.db
+  # For PostgreSQL: driver: postgres; dsn: "host=... user=... dbname=... sslmode=require"
+
+security:
+  # Generate with: openssl rand -base64 32
+  encryption_key: "<base64-encoded-32-byte-random-key>"
+
+limits:
+  max_message_bytes: 10485760
+  max_recipients: 100
+  max_connections: 64
+  max_queue_messages: 10000
+  max_queue_bytes: 1073741824
+
+worker:
+  concurrency: 4
+  attempt_timeout: 60s
+  lease_duration: 120s
+  retry_initial: 30s
+  retry_max: 15m
+  max_age: 24h
+  history_retention: 168h
+
+# Optional: when present, the relay is managed by this file and the API is read only.
+# relay:
+#   host: smtp.example.com
+#   port: 587
+#   tls: starttls
+#   username: alerts@example.com
+#   password: "<upstream-password>"
+#   from_address: alerts@example.com
+#   from_name: Notifications
